@@ -30,11 +30,11 @@ const TAU = Math.PI * 2;
 const UP = new THREE.Vector3(0, 1, 0);
 const RAFT_EYE = new THREE.Vector3(0, 3.15, 0.92);
 const WAVE_BASE = [
-  { direction: new THREE.Vector2(0.86, 0.51).normalize(), amplitude: 1.03, wavelength: 34.0, speed: 1.18, steepness: 0.46 },
-  { direction: new THREE.Vector2(-0.54, 0.84).normalize(), amplitude: 0.66, wavelength: 19.5, speed: 1.62, steepness: 0.39 },
-  { direction: new THREE.Vector2(0.21, -0.98).normalize(), amplitude: 0.39, wavelength: 10.4, speed: 2.12, steepness: 0.32 },
-  { direction: new THREE.Vector2(-0.91, -0.34).normalize(), amplitude: 0.23, wavelength: 6.7, speed: 2.72, steepness: 0.26 },
-  { direction: new THREE.Vector2(0.97, -0.19).normalize(), amplitude: 0.12, wavelength: 3.2, speed: 3.36, steepness: 0.18 },
+  { direction: new THREE.Vector2(0.88, 0.47).normalize(), amplitude: 0.78, wavelength: 56.0, speed: 0.74, steepness: 0.19, phase: 0.4, group: 0.18 },
+  { direction: new THREE.Vector2(-0.56, 0.83).normalize(), amplitude: 0.43, wavelength: 31.0, speed: 0.98, steepness: 0.24, phase: 2.1, group: 0.24 },
+  { direction: new THREE.Vector2(0.18, -0.98).normalize(), amplitude: 0.24, wavelength: 15.5, speed: 1.36, steepness: 0.21, phase: 4.3, group: 0.3 },
+  { direction: new THREE.Vector2(-0.91, -0.36).normalize(), amplitude: 0.10, wavelength: 7.2, speed: 1.96, steepness: 0.18, phase: 1.3, group: 0.38 },
+  { direction: new THREE.Vector2(0.96, -0.27).normalize(), amplitude: 0.035, wavelength: 3.1, speed: 2.72, steepness: 0.12, phase: 3.6, group: 0.46 },
 ];
 
 const byId = (id) => document.getElementById(id);
@@ -79,13 +79,16 @@ function oceanSample(x, z, elapsed, seaState) {
   let height = 0;
   let dx = 0;
   let dz = 0;
+  let verticalVelocity = 0;
   let tangentX = new THREE.Vector3(1, 0, 0);
   let tangentZ = new THREE.Vector3(0, 0, 1);
 
   for (const wave of WAVE_BASE) {
     const k = TAU / wave.wavelength;
-    const amplitude = wave.amplitude * seaState;
-    const phase = (wave.direction.x * x + wave.direction.y * z) * k + elapsed * wave.speed;
+    const groupPhase = (wave.direction.x * x + wave.direction.y * z) * k * wave.group + elapsed * wave.speed * wave.group + wave.phase;
+    const groupEnvelope = 0.78 + Math.sin(groupPhase) * 0.22;
+    const amplitude = wave.amplitude * seaState * groupEnvelope;
+    const phase = (wave.direction.x * x + wave.direction.y * z) * k + elapsed * wave.speed + wave.phase;
     const s = Math.sin(phase);
     const c = Math.cos(phase);
     const qa = wave.steepness * amplitude;
@@ -93,6 +96,7 @@ function oceanSample(x, z, elapsed, seaState) {
     height += amplitude * s;
     dx += wave.direction.x * qa * c;
     dz += wave.direction.y * qa * c;
+    verticalVelocity += amplitude * wave.speed * c;
 
     tangentX.x -= wave.direction.x * wave.direction.x * qa * k * s;
     tangentX.y += wave.direction.x * amplitude * k * c;
@@ -104,7 +108,7 @@ function oceanSample(x, z, elapsed, seaState) {
   }
 
   const normal = new THREE.Vector3().crossVectors(tangentZ, tangentX).normalize();
-  return { height, displacementX: dx, displacementZ: dz, normal };
+  return { height, displacementX: dx, displacementZ: dz, verticalVelocity, normal };
 }
 
 function createOceanMaterial() {
@@ -132,10 +136,16 @@ function createOceanMaterial() {
 
   for (const wave of WAVE_BASE) {
     const k = TAU / wave.wavelength;
-    const amplitude = float(wave.amplitude).mul(seaStrength);
+    const groupPhase = worldP.x.mul(wave.direction.x * k * wave.group)
+      .add(worldP.z.mul(wave.direction.y * k * wave.group))
+      .add(time.mul(wave.speed * wave.group))
+      .add(wave.phase);
+    const groupEnvelope = sin(groupPhase).mul(0.22).add(0.78);
+    const amplitude = float(wave.amplitude).mul(seaStrength).mul(groupEnvelope);
     const phase = worldP.x.mul(wave.direction.x * k)
       .add(worldP.z.mul(wave.direction.y * k))
-      .add(time.mul(wave.speed));
+      .add(time.mul(wave.speed))
+      .add(wave.phase);
     const waveSin = sin(phase);
     const waveCos = cos(phase);
     const qa = amplitude.mul(wave.steepness);
@@ -176,29 +186,32 @@ function createOceanMaterial() {
     0.5,
   ).mul(0.5).add(0.5);
 
-  const deepWater = vec3(0.005, 0.044, 0.097);
-  const shelfWater = vec3(0.02, 0.22, 0.3);
-  const brightWater = vec3(0.08, 0.44, 0.5);
-  const waterTone = mix(deepWater, shelfWater, broadNoise.mul(0.62).add(dayAmount.mul(0.16)));
-  const waterDetail = mix(waterTone, brightWater, mediumNoise.mul(0.17));
+  const deepWater = vec3(0.003, 0.03, 0.05);
+  const shelfWater = vec3(0.008, 0.18, 0.21);
+  const brightWater = vec3(0.075, 0.43, 0.44);
+  const waterTone = mix(deepWater, shelfWater, broadNoise.mul(0.56).add(dayAmount.mul(0.2)));
+  const waterDetail = mix(waterTone, brightWater, mediumNoise.mul(0.11));
   const viewDirection = cameraPosition.sub(positionWorld).normalize();
-  const fresnel = float(1).sub(dot(normalWorld, viewDirection).max(0)).pow(4.1);
-  const sunGlitter = dot(normalWorld, sunDirection).max(0).pow(42).mul(0.8);
-  const crestFoam = smoothstep(0.48, 1.25, height)
-    .add(smoothstep(0.76, 0.94, fineNoise).mul(0.22))
-    .mul(smoothstep(0.08, 0.92, seaStrength))
-    .min(0.82);
-  const transmissiveCrest = smoothstep(0.15, 1.15, height).mul(sunColor).mul(0.2);
-  const foamColor = vec3(0.72, 0.92, 0.89).mul(crestFoam);
-  const reflectedSky = sunColor.mul(fresnel.mul(0.42)).add(vec3(0.09, 0.18, 0.25).mul(fresnel));
+  const fresnel = float(1).sub(dot(normalWorld, viewDirection).max(0)).pow(4.8);
+  const microGlitter = smoothstep(0.44, 0.82, fineNoise).mul(smoothstep(0.3, 0.92, mediumNoise));
+  const sunGlitter = dot(normalWorld, sunDirection).max(0).pow(145).mul(microGlitter).mul(2.15);
+  const slope = float(1).sub(analyticNormal.y.clamp(0, 1));
+  const crestFoam = smoothstep(0.12, 0.31, slope)
+    .mul(smoothstep(0.38, 0.96, height))
+    .mul(smoothstep(0.58, 0.86, fineNoise))
+    .mul(smoothstep(0.42, 1.36, seaStrength))
+    .min(0.46);
+  const transmissiveCrest = smoothstep(0.24, 1.02, height).mul(sunColor).mul(0.1);
+  const foamColor = vec3(0.78, 0.95, 0.91).mul(crestFoam);
+  const reflectedSky = sunColor.mul(fresnel.mul(0.28)).add(vec3(0.05, 0.16, 0.19).mul(fresnel));
 
   material.colorNode = waterDetail
     .add(reflectedSky)
     .add(transmissiveCrest)
     .add(foamColor)
     .add(sunColor.mul(sunGlitter));
-  material.roughnessNode = mix(float(0.1), float(0.31), mediumNoise);
-  material.metalnessNode = float(0.12);
+  material.roughnessNode = mix(float(0.055), float(0.24), mediumNoise);
+  material.metalnessNode = float(0.19);
 
   return { material, seaStrength, waterOffset, sunDirection, sunColor, dayAmount };
 }
@@ -403,9 +416,12 @@ class OceanWorld {
     this.ship = null;
     this.stars = null;
     this.driftPosition = new THREE.Vector3(0, 0, 0);
+    this.driftVelocity = new THREE.Vector3(0, 0, 0);
     this.driftHeading = new THREE.Vector3(0.22, 0, -1).normalize();
     this.targetQuaternion = new THREE.Quaternion();
     this.limitedTilt = new THREE.Euler();
+    this.buoyancyVelocity = 0;
+    this.heaveOffset = 0;
     this.rippleClock = 0;
     this.viewLocked = true;
     this.running = false;
@@ -640,24 +656,56 @@ class OceanWorld {
 
   updateRaft(delta) {
     const speed = 0.12 + this.settings.driftSpeed * 0.66;
-    this.driftPosition.addScaledVector(this.driftHeading, speed * delta);
+    const targetVelocity = this.driftHeading.clone().multiplyScalar(speed);
+    this.driftVelocity.lerp(targetVelocity, expLerpFactor(0.62, delta));
+    this.driftPosition.addScaledVector(this.driftVelocity, delta);
     this.driftHeading.x += Math.sin(this.elapsed * 0.05) * delta * 0.004;
     this.driftHeading.normalize();
 
+    const forward = this.driftHeading.clone();
+    const right = new THREE.Vector3(-forward.z, 0, forward.x).normalize();
+    const samplePoint = (forwardOffset, lateralOffset) => this.driftPosition.clone()
+      .addScaledVector(forward, forwardOffset)
+      .addScaledVector(right, lateralOffset);
+    const portBowPoint = samplePoint(2.04, -1.25);
+    const starboardBowPoint = samplePoint(2.04, 1.25);
+    const portSternPoint = samplePoint(-2.04, -1.25);
+    const starboardSternPoint = samplePoint(-2.04, 1.25);
+    const portBow = oceanSample(portBowPoint.x, portBowPoint.z, this.elapsed, this.settings.seaState);
+    const starboardBow = oceanSample(starboardBowPoint.x, starboardBowPoint.z, this.elapsed, this.settings.seaState);
+    const portStern = oceanSample(portSternPoint.x, portSternPoint.z, this.elapsed, this.settings.seaState);
+    const starboardStern = oceanSample(starboardSternPoint.x, starboardSternPoint.z, this.elapsed, this.settings.seaState);
     const center = oceanSample(this.driftPosition.x, this.driftPosition.z, this.elapsed, this.settings.seaState);
-    const right = oceanSample(this.driftPosition.x + 1.35, this.driftPosition.z, this.elapsed, this.settings.seaState);
-    const front = oceanSample(this.driftPosition.x, this.driftPosition.z - 1.75, this.elapsed, this.settings.seaState);
-    const blendedNormal = center.normal.add(right.normal).add(front.normal).normalize();
-    this.targetQuaternion.setFromUnitVectors(UP, blendedNormal);
+
+    const bowHeight = (portBow.height + starboardBow.height) * 0.5;
+    const sternHeight = (portStern.height + starboardStern.height) * 0.5;
+    const portHeight = (portBow.height + portStern.height) * 0.5;
+    const starboardHeight = (starboardBow.height + starboardStern.height) * 0.5;
+    const waterForward = forward.clone().multiplyScalar(4.08);
+    waterForward.y = bowHeight - sternHeight;
+    const waterRight = right.clone().multiplyScalar(2.5);
+    waterRight.y = starboardHeight - portHeight;
+    const waterNormal = new THREE.Vector3().crossVectors(waterRight, waterForward).normalize();
+    if (waterNormal.y < 0) waterNormal.negate();
+    const raftZAxis = forward.clone().negate();
+    const orientation = new THREE.Matrix4().makeBasis(waterRight.normalize(), waterNormal, raftZAxis);
+    this.targetQuaternion.setFromRotationMatrix(orientation);
     this.limitedTilt.setFromQuaternion(this.targetQuaternion, "YXZ");
     this.limitedTilt.x = THREE.MathUtils.clamp(this.limitedTilt.x, -0.18, 0.18);
     this.limitedTilt.z = THREE.MathUtils.clamp(this.limitedTilt.z, -0.2, 0.2);
-    this.limitedTilt.y = 0;
+    this.limitedTilt.y += Math.sin(this.elapsed * 0.085) * 0.012;
     this.targetQuaternion.setFromEuler(this.limitedTilt);
 
-    const vertical = center.height + 0.24;
-    this.raft.position.lerp(new THREE.Vector3(this.driftPosition.x, vertical, this.driftPosition.z), expLerpFactor(5.2, delta));
-    this.raft.quaternion.slerp(this.targetQuaternion, expLerpFactor(3.5, delta));
+    const averageWaterline = (portBow.height + starboardBow.height + portStern.height + starboardStern.height) * 0.25 + 0.2;
+    const displacement = averageWaterline - this.raft.position.y;
+    this.buoyancyVelocity += displacement * 15.5 * delta;
+    this.buoyancyVelocity *= Math.exp(-4.4 * delta);
+    this.raft.position.x = THREE.MathUtils.damp(this.raft.position.x, this.driftPosition.x, 2.0, delta);
+    this.raft.position.z = THREE.MathUtils.damp(this.raft.position.z, this.driftPosition.z, 2.0, delta);
+    this.raft.position.y += this.buoyancyVelocity * delta;
+    this.raft.quaternion.slerp(this.targetQuaternion, expLerpFactor(2.35, delta));
+    this.heaveOffset = THREE.MathUtils.damp(this.heaveOffset, THREE.MathUtils.clamp(-this.buoyancyVelocity * 0.055, -0.08, 0.08), 3.2, delta);
+    this.cameraRig.position.y = RAFT_EYE.y + this.heaveOffset;
 
     this.ocean.position.set(this.raft.position.x, -0.03, this.raft.position.z);
     this.oceanMaterial.waterOffset.value.set(this.ocean.position.x, this.ocean.position.z);
@@ -667,16 +715,17 @@ class OceanWorld {
     const backward = this.driftHeading.clone().multiplyScalar(-1);
     const rightward = new THREE.Vector3(-this.driftHeading.z, 0, this.driftHeading.x);
     const wakeBase = this.raft.position.clone().addScaledVector(backward, 1.8);
+    const wakeWater = oceanSample(wakeBase.x, wakeBase.z, this.elapsed, this.settings.seaState);
     this.wake.position.copy(wakeBase);
     this.wake.rotation.y = Math.atan2(rightward.z, rightward.x) - Math.PI / 2;
-    this.wake.position.y = center.height + 0.05;
-    this.wake.material.opacity = 0.3 + Math.min(0.42, this.settings.seaState * 0.25);
+    this.wake.position.y = wakeWater.height + 0.04;
+    this.wake.material.opacity = 0.2 + Math.min(0.35, this.settings.seaState * 0.2) + Math.min(0.15, Math.abs(center.verticalVelocity) * 0.05);
 
     this.rippleClock += delta * (0.55 + this.settings.driftSpeed);
     this.ripples.forEach((ripple, index) => {
       const phase = (this.rippleClock + index / this.ripples.length) % 1;
       ripple.position.copy(wakeBase).addScaledVector(backward, 0.2 + index * 0.38);
-      ripple.position.y = center.height + 0.018;
+      ripple.position.y = oceanSample(ripple.position.x, ripple.position.z, this.elapsed, this.settings.seaState).height + 0.018;
       ripple.scale.setScalar(0.6 + phase * 1.55);
       ripple.material.opacity = (1 - phase) * 0.2;
     });
